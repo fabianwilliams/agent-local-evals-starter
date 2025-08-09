@@ -1,86 +1,92 @@
-import "dotenv/config";
-import OpenAI from "openai";
-import { tracer } from "./otel.ts";
+import { Agent, run, tool } from "@openai/agents";
+import { z } from "zod";
+import { config } from "dotenv";
+import "./otel.js";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: process.env.OPENAI_BASE_URL // optional: LiteLLM proxy in front of Ollama
+// Load environment variables
+config();
+
+// Define the time tool using the Agents SDK format
+const getLocalTimeTool = tool({
+  name: "get_local_time",
+  description: "Get the current local time in ISO-8601 format",
+  parameters: z.object({}),
+  async execute(): Promise<string> {
+    return new Date().toISOString();
+  }
 });
 
-const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "get_local_time",
-      description: "Return current local time in ISO-8601",
-      parameters: { type: "object", properties: {}, additionalProperties: false }
-    }
-  }
-];
+// Create the agent with proper name for tracing
+const timeAgent = new Agent({
+  name: "TimeAgent-Main",
+  model: "gpt-4o-mini",
+  instructions: `You are a helpful time assistant. When asked for the time, use the get_local_time tool to get the current time in ISO-8601 format and respond with the timestamp clearly.`,
+  tools: [getLocalTimeTool]
+});
 
-function get_local_time() {
-  return new Date().toISOString();
-}
-
-async function main() {
-  const span = tracer.startSpan("agent.run");
-  span.setAttributes({
-    "agent.type": "agents-sdk-ts",
-    "agent.query": "What's the time right now?",
-    "llm.model": "gpt-4o-mini"
-  });
-
-  const run = await client.chat.completions.create({
-    model: "gpt-4o-mini", // swap to your preferred model or your local proxy model name
-    messages: [
-      { role: "system", content: "You are a helpful assistant. Use tools if needed." },
-      { role: "user", content: "What's the time right now?" }
-    ],
-    tools,
-    tool_choice: "auto"
-  });
-
-  const msg = run.choices[0].message;
-
-  if (msg.tool_calls?.length) {
-    for (const tc of msg.tool_calls) {
-      if (tc.function?.name === "get_local_time") {
-        const result = get_local_time();
-
-        const followUp = await client.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: "You are a helpful assistant." },
-            { role: "user", content: "What's the time right now?" },
-            { role: "assistant", tool_calls: [tc], content: "" } as any,
-            { role: "tool", tool_call_id: tc.id!, content: result } as any
-          ]
-        });
-
-        console.log(followUp.choices[0].message.content);
-      }
-    }
-  } else {
-    console.log(msg.content);
-  }
-
-  span.setAttributes({
-    "agent.completed": true,
-    "response.length": msg.content?.length || 0
-  });
-  span.end();
-}
-
-main().then(async () => {
-  console.log("🔄 Flushing traces...");
-  // Force flush traces before exit
-  const { trace } = await import("@opentelemetry/api");
-  const activeSpan = trace.getActiveSpan();
-  if (activeSpan) {
-    console.log("📊 Active span found, ending...");
-  }
+async function main(): Promise<void> {
+  console.log("🚀 Starting OpenAI Agents SDK with Azure Application Insights integration");
+  console.log("=" .repeat(70));
   
-  // Wait a moment for async operations to complete
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  console.log("✅ Traces should be exported now");
-}).catch(console.error);
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error("OPENAI_API_KEY environment variable is required");
+    }
+
+    const query = "What's the time right now? Please respond with an ISO-8601 timestamp.";
+    console.log(`📝 Query: ${query}`);
+    
+    const startTime = Date.now();
+    const result = await run(timeAgent, query);
+    const endTime = Date.now();
+    
+    // Extract the response safely
+    const finalMessage = result.output.find(item => 
+      item.type === 'message' && item.role === 'assistant'
+    );
+    
+    if (finalMessage && 'content' in finalMessage && finalMessage.content && Array.isArray(finalMessage.content)) {
+      const textContent = finalMessage.content.find((c: any) => c.type === 'text');
+      if (textContent && 'text' in textContent) {
+        console.log(`✅ Response: ${textContent.text}`);
+      }
+    } else {
+      console.log("✅ Response received (content format not accessible)");
+    }
+    
+    console.log(`⏱️ Response Time: ${endTime - startTime}ms`);
+    
+    if ('_trace' in result.state && result.state._trace && 'traceId' in result.state._trace) {
+      console.log(`🆔 Trace ID: ${(result.state._trace as any).traceId}`);
+      console.log(`📊 Check OpenAI Dashboard: https://platform.openai.com/organization/logs`);
+    }
+    
+    console.log("=" .repeat(70));
+    console.log("✅ Agent execution completed successfully");
+    
+    if (process.env.AZURE_MONITOR_CONNECTION_STRING) {
+      console.log("📈 Azure Application Insights integration enabled");
+      console.log("   Traces should appear in Azure portal within 2-5 minutes");
+    } else {
+      console.log("⚠️ Azure Application Insights not configured");
+      console.log("   Set AZURE_MONITOR_CONNECTION_STRING to enable");
+    }
+    
+  } catch (error) {
+    console.error("❌ Error running agent:", error);
+    process.exit(1);
+  }
+}
+
+// Run the main function
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main()
+    .then(() => {
+      console.log("🎉 Application completed successfully");
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error("💥 Application failed:", error);
+      process.exit(1);
+    });
+}

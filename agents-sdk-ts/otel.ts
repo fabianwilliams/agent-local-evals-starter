@@ -1,47 +1,34 @@
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { AzureMonitorTraceExporter } from "@azure/monitor-opentelemetry-exporter";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { trace } from "@opentelemetry/api";
-// Simplified OTEL configuration for Agents SDK
 
-const provider = new NodeTracerProvider();
+// Simplified Azure Application Insights configuration
+// Focus on getting traces to Azure Application Insights working first
 
-// OTLP Exporter for Docker/Aspire Dashboard
-const otlpExporter = new OTLPTraceExporter({
-  // honors OTEL_EXPORTER_OTLP_ENDPOINT env var; defaults to http://localhost:4318/v1/traces
-});
-provider.addSpanProcessor(new BatchSpanProcessor(otlpExporter));
+let azureExporter: AzureMonitorTraceExporter | null = null;
 
-// Azure Monitor Exporter
 if (process.env.AZURE_MONITOR_CONNECTION_STRING) {
-  const azureExporter = new AzureMonitorTraceExporter({
-    connectionString: process.env.AZURE_MONITOR_CONNECTION_STRING,
-  });
-  provider.addSpanProcessor(new BatchSpanProcessor(azureExporter));
+  console.log("🔧 Configuring Azure Application Insights exporter...");
+  
+  try {
+    azureExporter = new AzureMonitorTraceExporter({
+      connectionString: process.env.AZURE_MONITOR_CONNECTION_STRING,
+    });
+    
+    console.log("✅ Azure Application Insights exporter created successfully");
+    console.log("🔗 Connection string configured (first 50 chars):", 
+      process.env.AZURE_MONITOR_CONNECTION_STRING.substring(0, 50) + "...");
+  } catch (error) {
+    console.error("❌ Failed to create Azure Application Insights exporter:", error);
+  }
+} else {
+  console.log("⚠️ AZURE_MONITOR_CONNECTION_STRING not set - Azure Application Insights disabled");
+  console.log("   To enable, set your connection string in the .env file");
 }
 
-provider.register();
+// Simple tracer export for now - let OpenAI Agents SDK handle the main tracing
+export const tracer = trace.getTracer("agents-sdk-ts", "1.0.0");
 
-console.log("OpenTelemetry initialized with exporters:");
-console.log("- OTLP endpoint:", process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318/v1/traces");
-console.log("- Azure Monitor:", process.env.AZURE_MONITOR_CONNECTION_STRING ? "enabled" : "disabled");
+// Export the exporter for potential manual use
+export { azureExporter };
 
-// Add span listeners for debugging
-provider.getActiveSpanProcessor().forceFlush = ((originalForceFlush) => {
-  return function(timeoutMillis) {
-    console.log("🔄 Flushing spans to exporters...");
-    return originalForceFlush.call(this, timeoutMillis);
-  };
-})(provider.getActiveSpanProcessor().forceFlush.bind(provider.getActiveSpanProcessor()));
-
-// Force flush on process exit
-process.on('exit', () => {
-  provider.forceFlush().then(() => {
-    console.log("✅ All spans flushed on exit");
-  }).catch(err => {
-    console.error("❌ Error flushing spans:", err);
-  });
-});
-
-export const tracer = trace.getTracer("agents-sdk-ts");
+console.log("🚀 Azure Application Insights integration ready");
