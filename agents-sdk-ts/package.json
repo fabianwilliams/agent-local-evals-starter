@@ -1,0 +1,23 @@
+{
+  "name": "agents-sdk-ts",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "ts-node index.ts"
+  },
+  "dependencies": {
+    "@azure/monitor-opentelemetry-exporter": "^1.0.0-beta.32",
+    "@openai/agents": "^0.0.15",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.54.0",
+    "@opentelemetry/sdk-trace-node": "^1.26.0",
+    "dotenv": "^16.4.5",
+    "openai": "^4.56.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}
