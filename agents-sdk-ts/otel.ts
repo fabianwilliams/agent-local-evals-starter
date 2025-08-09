@@ -1,12 +1,9 @@
-// Load env FIRST (ESM import order matters)
 import 'dotenv/config';
 
 import { trace, Tracer } from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import {
-  BatchSpanProcessor,
-  type SpanExporter,
-} from '@opentelemetry/sdk-trace-base';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { AzureMonitorTraceExporter } from '@azure/monitor-opentelemetry-exporter';
 
 const conn = (process.env.AZURE_MONITOR_CONNECTION_STRING ?? '').trim();
@@ -22,19 +19,22 @@ if (conn) {
 
     provider = new NodeTracerProvider();
 
-    // Type-only cast to smooth over minor SDK/exporter signature drift
+    // Use a single exporter instance; smooth over TS type drift
     const exporter = azureExporter as unknown as SpanExporter;
 
-    provider.addSpanProcessor(
-      new BatchSpanProcessor(exporter, {
-        maxQueueSize: 1024,
-        maxExportBatchSize: 256,
-        scheduledDelayMillis: 1000,
-        exportTimeoutMillis: 10000,
-      }),
-    );
+    // 🔧 TS-unblock: avoid cross-package Span type mismatch
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const processor: any = new BatchSpanProcessor(exporter, {
+      maxQueueSize: 1024,
+      maxExportBatchSize: 256,
+      scheduledDelayMillis: 1000,
+      exportTimeoutMillis: 10000,
+    });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as any).addSpanProcessor(processor);
     provider.register();
+
     tracer = trace.getTracer('agents-sdk-ts', '1.0.0');
     azureEnabled = true;
     console.log('✅ Azure Application Insights enabled');
@@ -43,9 +43,7 @@ if (conn) {
     console.warn('⚠️ Continuing without Azure tracing.');
   }
 } else {
-  console.warn(
-    '⚠️ Azure Application Insights disabled (AZURE_MONITOR_CONNECTION_STRING not set)',
-  );
+  console.warn('⚠️ Azure Application Insights disabled (AZURE_MONITOR_CONNECTION_STRING not set)');
 }
 
 export { tracer, azureExporter, provider, azureEnabled };
