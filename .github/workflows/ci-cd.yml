@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
   typescript-lint-and-test:
     name: TypeScript Lint & Test
@@ -149,6 +154,8 @@ jobs:
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy-ready:
     name: Ready for Deployment
