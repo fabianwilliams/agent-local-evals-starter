@@ -1,182 +1,153 @@
-import { Agent, run, tool } from "@openai/agents";
-import { z } from "zod";
-import { config } from "dotenv";
-import { tracer, azureExporter } from './otel.js';
+import 'dotenv/config';
+import { tracer as azureTracer, azureEnabled } from './otel.js';
+import { Agent, run, tool } from '@openai/agents';
+import { z } from 'zod';
 
-// Load environment variables  
-config();
-
-// Azure Application Insights tracer (simplified approach)
-let azureTracer: any = null;
-if (process.env.AZURE_MONITOR_CONNECTION_STRING && tracer) {
-  azureTracer = tracer;
-  console.log("✅ Azure Application Insights integration ready");
-} else {
-  console.log("⚠️ Azure Application Insights not configured");
-}
+// One clear status line based on otel.ts init
+console.log(
+  azureEnabled
+    ? '📈 Azure Application Insights integration active'
+    : '⚠️ Azure Application Insights not configured'
+);
 
 // Define the time tool using the Agents SDK format
 const getLocalTimeTool = tool({
-  name: "get_local_time",
-  description: "Get the current local time in ISO-8601 format",
+  name: 'get_local_time',
+  description: 'Get the current local time in ISO-8601 format',
   parameters: z.object({}),
   async execute(): Promise<string> {
     return new Date().toISOString();
-  }
+  },
 });
 
 // Create the agent with proper name for tracing
 const timeAgent = new Agent({
-  name: "TimeAgent-Main",
-  model: "gpt-4o-mini",
-  instructions: `You are a helpful time assistant. When asked for the time, use the get_local_time tool to get the current time in ISO-8601 format and respond with the timestamp clearly.`,
-  tools: [getLocalTimeTool]
+  name: 'TimeAgent-Main',
+  model: 'gpt-4o-mini',
+  instructions:
+    'You are a helpful time assistant. When asked for the time, use the get_local_time tool to get the current time in ISO-8601 format and respond with the timestamp clearly.',
+  tools: [getLocalTimeTool],
 });
 
 async function main(): Promise<void> {
-  console.log("🚀 Starting OpenAI Agents SDK with Azure Application Insights integration");
-  console.log("=" .repeat(70));
-  
+  console.log('🚀 Starting OpenAI Agents SDK with Azure Application Insights integration');
+  console.log('='.repeat(70));
+
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY environment variable is required');
+  }
+
   // Create Azure Application Insights span as REQUEST (not dependency)
-  let azureSpan = null;
-  if (azureTracer) {
-    azureSpan = azureTracer.startSpan("agent.execution");
-    azureSpan.setAttributes({
-      "http.method": "POST", // Makes it show as request
-      "http.route": "/agent/query", 
-      "http.url": "http://localhost/agent/query",
-      "operation.type": "request",
-      "agent.name": "TimeAgent-Main",
-      "agent.model": "gpt-4o-mini",
-      "service.name": "agents-sdk-ts",
-      "service.version": "1.0.0"
+  const span = azureEnabled ? azureTracer.startSpan('agent.execution') : null;
+  if (span) {
+    span.setAttributes({
+      'http.method': 'POST',
+      'http.route': '/agent/query',
+      'http.url': 'http://localhost/agent/query',
+      'operation.type': 'request',
+      'agent.name': 'TimeAgent-Main',
+      'agent.model': 'gpt-4o-mini',
+      'service.name': 'agents-sdk-ts',
+      'service.version': '1.0.0',
     });
   }
-  
+
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error("OPENAI_API_KEY environment variable is required");
+    const query =
+      "What's the time right now? Please respond with an ISO-8601 timestamp as well as a human friendly timestamp.";
+    console.log(`📝 Query: ${query}`);
+    if (span) {
+      span.setAttributes({ 'agent.query': query, 'query.timestamp': new Date().toISOString() });
     }
 
-    const query = "What's the time right now? Please respond with an ISO-8601 timestamp as well as a human friendly timestamp.";
-    console.log(`📝 Query: ${query}`);
-    
-    if (azureSpan) {
-      azureSpan.setAttributes({
-        "agent.query": query,
-        "query.timestamp": new Date().toISOString()
-      });
-    }
-    
     const startTime = Date.now();
     const result = await run(timeAgent, query);
     const endTime = Date.now();
-    
+
     // Extract the response safely
-    let responseText = "Response received (content format not accessible)";
-    const finalMessage = result.output.find(item => 
-      item.type === 'message' && item.role === 'assistant'
+    let responseText = 'Response received (content format not accessible)';
+    const finalMessage = result.output.find(
+      (item: any) => item.type === 'message' && item.role === 'assistant'
     );
-    
-    if (finalMessage && 'content' in finalMessage && finalMessage.content && Array.isArray(finalMessage.content)) {
-      // Handle both 'text' and 'output_text' content types
-      const textContent = finalMessage.content.find((c: any) => 
-        c.type === 'text' || c.type === 'output_text'
+    if (finalMessage && Array.isArray((finalMessage as any).content)) {
+      const textContent = (finalMessage as any).content.find(
+        (c: any) => c.type === 'text' || c.type === 'output_text'
       );
-      if (textContent && 'text' in textContent) {
+      if (textContent?.text) {
         responseText = textContent.text;
         console.log(`✅ Response: ${responseText}`);
       }
     } else {
-      console.log("✅ Response received (content format not accessible)");
+      console.log('✅ Response received (content format not accessible)');
     }
-    
     console.log(`⏱️ Response Time: ${endTime - startTime}ms`);
-    
-    // Create separate spans for tool calls and responses
-    if (azureTracer) {
-      // 1. Tool Call Span
-      const toolCalls = result.output.filter(item => 
-        item.type === 'hosted_tool_call' || item.type === 'function_call'
+
+    // Tool call spans (best-effort)
+    if (azureEnabled) {
+      const toolCalls = result.output.filter(
+        (item: any) => item.type === 'hosted_tool_call' || item.type === 'function_call'
       );
-      
-      toolCalls.forEach((toolCall, index) => {
-        const toolSpan = azureTracer.startSpan("tool.execution");
+      toolCalls.forEach((toolCall: any, index: number) => {
+        const toolSpan = azureTracer.startSpan('tool.execution');
         toolSpan.setAttributes({
-          "tool.name": 'name' in toolCall ? toolCall.name : 'unknown',
-          "tool.index": index,
-          "operation.type": "tool_call",
-          "service.name": "agents-sdk-ts"
+          'tool.name': toolCall?.name ?? 'unknown',
+          'tool.index': index,
+          'operation.type': 'tool_call',
+          'service.name': 'agents-sdk-ts',
         });
-        
-        // Add tool result if available
-        if ('output' in toolCall && toolCall.output) {
-          toolSpan.setAttributes({
-            "tool.result": toolCall.output,
-            "tool.success": true
-          });
+        if (toolCall?.output) {
+          toolSpan.setAttributes({ 'tool.result': String(toolCall.output), 'tool.success': true });
         }
-        
         toolSpan.end();
-        console.log(`🔧 Tool Call ${index + 1}: ${toolCall.name || 'unknown'}() logged to Azure`);
+        console.log(`🔧 Tool Call ${index + 1}: ${toolCall?.name ?? 'unknown'}() logged to Azure`);
       });
-      
-      // 2. Response Synthesis Span
-      const synthesisSpan = azureTracer.startSpan("agent.synthesis");
+
+      const synthesisSpan = azureTracer.startSpan('agent.synthesis');
       synthesisSpan.setAttributes({
-        "operation.type": "response_synthesis",
-        "agent.response": responseText,
-        "agent.response_length": responseText.length,
-        "service.name": "agents-sdk-ts",
-        "synthesis.tool_calls_count": toolCalls.length
+        'operation.type': 'response_synthesis',
+        'agent.response': responseText,
+        'agent.response_length': responseText.length,
+        'service.name': 'agents-sdk-ts',
       });
-      
       synthesisSpan.end();
       console.log(`📝 Response synthesis logged: "${responseText.substring(0, 100)}..."`);
     }
-    
-    if ('_trace' in result.state && result.state._trace && 'traceId' in result.state._trace) {
-      console.log(`🆔 Trace ID: ${(result.state._trace as any).traceId}`);
-      console.log(`📊 Check OpenAI Dashboard: https://platform.openai.com/organization/logs`);
+
+    // Print OpenAI trace id if present
+    const traceId = (result.state as any)?._trace?.traceId;
+    if (traceId) {
+      console.log(`🆔 Trace ID: ${traceId}`);
+      console.log('📊 Check OpenAI Dashboard: https://platform.openai.com/organization/logs');
     }
-    
-    if (azureSpan) {
-      azureSpan.setAttributes({
-        "response.time_ms": endTime - startTime,
-        "agent.success": true,
-        "agent.response": responseText,
-        "agent.response_length": responseText.length,
-        "openai.trace_id": (result.state as any)._trace?.traceId || "unknown"
+
+    if (span) {
+      span.setAttributes({
+        'response.time_ms': endTime - startTime,
+        'agent.success': true,
+        'agent.response': responseText,
+        'agent.response_length': responseText.length,
+        'openai.trace_id': traceId ?? 'unknown',
       });
-      azureSpan.end();
+      span.end();
     }
-    
-    console.log("=" .repeat(70));
-    console.log("✅ Agent execution completed successfully");
-    
-    if (process.env.AZURE_MONITOR_CONNECTION_STRING && azureExporter) {
-      console.log("📈 Azure Application Insights integration enabled");
-      console.log("   Flushing traces to Azure portal...");
-      try {
-        // Let spans auto-flush or use a simple setTimeout
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        console.log("   ✅ Traces should be sent to Azure");
-        console.log("   📊 Check Azure portal within 2-5 minutes");
-      } catch (error) {
-        console.error("   ❌ Error with Azure integration:", error);
-      }
+
+    console.log('='.repeat(70));
+    console.log('✅ Agent execution completed successfully');
+
+    // Let spans flush
+    if (azureEnabled) {
+      await new Promise((r) => setTimeout(r, 2000));
+      console.log('📤 Traces queued for export (check Azure in ~2–5 min)');
     } else {
-      console.log("⚠️ Azure Application Insights not configured");
+      console.log('⚠️ Azure Application Insights not configured');
     }
-    
   } catch (error) {
-    if (azureSpan) {
-      azureSpan.recordException(error as Error);
-      azureSpan.setAttributes({ "agent.success": false });
-      azureSpan.end();
+    if (span) {
+      span.recordException(error as Error);
+      span.setAttributes({ 'agent.success': false });
+      span.end();
     }
-    console.error("❌ Error running agent:", error);
-    // Simple error handling without provider dependencies
+    console.error('❌ Error running agent:', error);
     process.exit(1);
   }
 }
@@ -185,11 +156,11 @@ async function main(): Promise<void> {
 if (import.meta.url === `file://${process.argv[1]}`) {
   main()
     .then(() => {
-      console.log("🎉 Application completed successfully");
+      console.log('🎉 Application completed successfully');
       process.exit(0);
     })
     .catch((error) => {
-      console.error("💥 Application failed:", error);
+      console.error('💥 Application failed:', error);
       process.exit(1);
     });
 }
