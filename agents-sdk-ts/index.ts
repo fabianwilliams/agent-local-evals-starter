@@ -1,48 +1,18 @@
 import { Agent, run, tool } from "@openai/agents";
 import { z } from "zod";
 import { config } from "dotenv";
-import { AzureMonitorTraceExporter } from "@azure/monitor-opentelemetry-exporter";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { trace, SpanKind } from "@opentelemetry/api";
+import { tracer, azureExporter } from './otel.js';
 
 // Load environment variables  
 config();
 
-// Azure Application Insights setup
-let azureProvider: NodeTracerProvider | null = null;
+// Azure Application Insights tracer (simplified approach)
 let azureTracer: any = null;
-
-if (process.env.AZURE_MONITOR_CONNECTION_STRING) {
-  try {
-    console.log("🔧 Initializing Azure Application Insights...");
-    
-    azureProvider = new NodeTracerProvider({
-      serviceName: "agents-sdk-ts",
-      serviceVersion: "1.0.0",
-    });
-
-    const azureExporter = new AzureMonitorTraceExporter({
-      connectionString: process.env.AZURE_MONITOR_CONNECTION_STRING,
-    });
-
-    azureProvider.addSpanProcessor(new BatchSpanProcessor(azureExporter, {
-      maxQueueSize: 1024,
-      maxExportBatchSize: 256,
-      scheduledDelayMillis: 1000,
-      exportTimeoutMillis: 10000,
-    }));
-
-    azureProvider.register();
-    azureTracer = trace.getTracer("agents-sdk-ts-azure", "1.0.0");
-    
-    console.log("✅ Azure Application Insights initialized successfully");
-    
-  } catch (error) {
-    console.error("❌ Failed to initialize Azure Application Insights:", error);
-  }
+if (process.env.AZURE_MONITOR_CONNECTION_STRING && tracer) {
+  azureTracer = tracer;
+  console.log("✅ Azure Application Insights integration ready");
 } else {
-  console.log("⚠️ AZURE_MONITOR_CONNECTION_STRING not set - Azure tracing disabled");
+  console.log("⚠️ Azure Application Insights not configured");
 }
 
 // Define the time tool using the Agents SDK format
@@ -184,15 +154,16 @@ async function main(): Promise<void> {
     console.log("=" .repeat(70));
     console.log("✅ Agent execution completed successfully");
     
-    if (process.env.AZURE_MONITOR_CONNECTION_STRING && azureProvider) {
+    if (process.env.AZURE_MONITOR_CONNECTION_STRING && azureExporter) {
       console.log("📈 Azure Application Insights integration enabled");
       console.log("   Flushing traces to Azure portal...");
       try {
-        await azureProvider.forceFlush(5000);
-        console.log("   ✅ Traces flushed successfully");
+        // Let spans auto-flush or use a simple setTimeout
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log("   ✅ Traces should be sent to Azure");
         console.log("   📊 Check Azure portal within 2-5 minutes");
       } catch (error) {
-        console.error("   ❌ Error flushing traces:", error);
+        console.error("   ❌ Error with Azure integration:", error);
       }
     } else {
       console.log("⚠️ Azure Application Insights not configured");
@@ -205,9 +176,7 @@ async function main(): Promise<void> {
       azureSpan.end();
     }
     console.error("❌ Error running agent:", error);
-    if (azureProvider) {
-      await azureProvider.forceFlush(5000);
-    }
+    // Simple error handling without provider dependencies
     process.exit(1);
   }
 }
