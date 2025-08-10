@@ -17,7 +17,7 @@ This repo gives you a side‑by‑side harness to compare:
 - **Image management** with automatic organization by year/month
 - **Hugo integration** with proper frontmatter and static file handling
 
-**✅ Real Success Story**: This README was updated after FABS successfully generated and published a complete blog post to [fabianwilliams.com](https://fabianwilliams.com) using only local models - no OpenAI API calls required for the content generation!
+**✅ Real Success Story**: This README was updated after FABS successfully generated and published a complete blog post to [fabswill.com](https://fabswill.com) using only local models - no OpenAI API calls required for the content generation!
 
 ## 📊 System in Action
 
@@ -168,7 +168,7 @@ dotnet run
 5. **📰 Blog Publishing**: Copies to Hugo blog repository with proper frontmatter
 6. **🚀 CI/CD Ready**: Provides git commands for automated deployment
 
-**Real Results**: Successfully generated and published the "Agent + Local Model + Evals — One‑Pager" blog post visible at [fabianwilliams.com](https://fabianwilliams.com), including 25 properly organized images and complete Hugo integration.
+**Real Results**: Successfully generated and published the "Agent + Local Model + Evals — One‑Pager" blog post visible at [fabswill.com](https://fabswill.com), including 25 properly organized images and complete Hugo integration.
 
 ---
 
