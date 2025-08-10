@@ -4,14 +4,32 @@ import { Agent, run, tool } from '@openai/agents';
 import { z } from 'zod';
 import { context, trace as otelTrace, SpanKind } from '@opentelemetry/api';
 
-// One clear status line based on otel.ts init
+// ---------- lightweight types & guards (file-scope; keeps eslint happy) ----------
+type AssistantContentPart = { type: 'text' | 'output_text' | string; text?: string };
+type AssistantMessage = { type: 'message'; role: 'assistant'; content: AssistantContentPart[] };
+type ToolCallItem = { type: 'hosted_tool_call' | 'function_call'; name?: string; output?: unknown };
+type RunResult = { output?: unknown[]; state?: { _trace?: { traceId?: string } } };
+
+const isAssistantMessage = (x: unknown): x is AssistantMessage => {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
+  return o['type'] === 'message' && o['role'] === 'assistant' && Array.isArray(o['content']);
+};
+
+const isToolCall = (x: unknown): x is ToolCallItem => {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
+  return o['type'] === 'hosted_tool_call' || o['type'] === 'function_call';
+};
+// ---------------------------------------------------------------------------------
+
 console.log(
   azureEnabled
     ? '📈 Azure Application Insights integration active'
     : '⚠️ Azure Application Insights not configured'
 );
 
-// Define the time tool using the Agents SDK format
+// Tool used by the agent
 const getLocalTimeTool = tool({
   name: 'get_local_time',
   description: 'Get the current local time in ISO-8601 format',
@@ -21,7 +39,7 @@ const getLocalTimeTool = tool({
   },
 });
 
-// Create the agent with proper name for tracing
+// The agent
 const timeAgent = new Agent({
   name: 'TimeAgent-Main',
   model: 'gpt-4o-mini',
@@ -67,35 +85,19 @@ async function main(): Promise<void> {
     const startTime = Date.now();
 
     // Run the agent inside the parent span's context so children are correctly parented
-    const result = await (parent
+    const raw = await (parent
       ? context.with(parentCtx!, () => run(timeAgent, query))
       : run(timeAgent, query));
+    const result = raw as unknown as RunResult;
 
     const endTime = Date.now();
 
-    // Extract the response safely
+    // --- Extract the response safely (TS-friendly) ---
     let responseText = 'Response received (content format not accessible)';
-
-    // Type guard: does this object look like a message with content?
-    function isAssistantMessageWithContent(x: unknown): x is {
-      type: 'message';
-      role: 'assistant';
-      content: Array<{ type: string; text?: string }>;
-    } {
-      return !!x &&
-        typeof x === 'object' &&
-        (x as any).type === 'message' &&
-        (x as any).role === 'assistant' &&
-        Array.isArray((x as any).content);
-    }
-
-    const finalMessage = (result as any)?.output?.find(
-      (item: any) => item?.type === 'message' && item?.role === 'assistant'
-    );
-
-    if (isAssistantMessageWithContent(finalMessage)) {
+    const finalMessage = (result.output ?? []).find(isAssistantMessage);
+    if (finalMessage) {
       const part = finalMessage.content.find(
-        c => c?.type === 'text' || c?.type === 'output_text'
+        (c) => c?.type === 'text' || c?.type === 'output_text'
       );
       if (part?.text) {
         responseText = part.text;
@@ -104,25 +106,21 @@ async function main(): Promise<void> {
     } else {
       console.log('✅ Response received (content format not accessible)');
     }
-
     console.log(`⏱️ Response Time: ${endTime - startTime}ms`);
+    // --- end extract ---
 
     // OpenAI trace id (if Agents SDK provides it)
-    const openaiTraceId =
-      (result as any)?.state?._trace?.traceId ?? (result as any)?._trace?.traceId ?? null;
+    const openaiTraceId = result.state?._trace?.traceId ?? null;
     if (openaiTraceId) {
       console.log(`🆔 Trace ID: ${openaiTraceId}`);
       console.log('📊 Check OpenAI Dashboard: https://platform.openai.com/organization/logs');
     }
 
-    // Tool call spans (children of parent)
+    // Tool call spans (children)
     if (azureEnabled) {
-      const toolCalls =
-        result.output?.filter(
-          (item: any) => item.type === 'hosted_tool_call' || item.type === 'function_call'
-        ) ?? [];
+      const toolCalls = (result.output ?? []).filter(isToolCall);
 
-      toolCalls.forEach((toolCall: any, index: number) => {
+      toolCalls.forEach((toolCall, index) => {
         const toolSpan = azureTracer.startSpan(
           'tool.execution',
           { kind: SpanKind.INTERNAL },
@@ -131,16 +129,16 @@ async function main(): Promise<void> {
         toolSpan.setAttributes({
           'otel.trace_id': toolSpan.spanContext().traceId,
           ...(openaiTraceId ? { 'openai.trace_id': openaiTraceId } : {}),
-          'tool.name': toolCall?.name ?? 'unknown',
+          'tool.name': toolCall.name ?? 'unknown',
           'tool.index': index,
           'operation.type': 'tool_call',
           'service.name': 'agents-sdk-ts',
         });
-        if (toolCall?.output) {
+        if (toolCall.output !== undefined) {
           toolSpan.setAttributes({ 'tool.result': String(toolCall.output), 'tool.success': true });
         }
         toolSpan.end();
-        console.log(`🔧 Tool Call ${index + 1}: ${toolCall?.name ?? 'unknown'}() logged to Azure`);
+        console.log(`🔧 Tool Call ${index + 1}: ${toolCall.name ?? 'unknown'}() logged to Azure`);
       });
 
       // Response synthesis span (child)

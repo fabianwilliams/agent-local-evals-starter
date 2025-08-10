@@ -1,7 +1,10 @@
 import 'dotenv/config';
 import { trace, Tracer } from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { BatchSpanProcessor, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+import {
+  BatchSpanProcessor,
+  type SpanExporter,
+} from '@opentelemetry/sdk-trace-base';
 import { AzureMonitorTraceExporter } from '@azure/monitor-opentelemetry-exporter';
 import { Resource } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
@@ -24,9 +27,15 @@ if (conn) {
       }),
     });
 
+    // --- Smooth over OTEL type drift without using `any` ---
+    // Cast the Azure exporter through `unknown` into the local SpanExporter type
     const exporter = azureExporter as unknown as SpanExporter;
-    // avoid type mismatch noise; runtime is fine
-    (provider as any).addSpanProcessor(new BatchSpanProcessor(exporter));
+    const processor = new BatchSpanProcessor(exporter);
+
+    // `addSpanProcessor` expects its own SpanProcessor identity; use a structural cast
+    (provider as unknown as { addSpanProcessor(p: unknown): void }).addSpanProcessor(processor);
+    // -------------------------------------------------------
+
     provider.register();
 
     tracer = trace.getTracer('agents-sdk-ts', '1.0.0');
