@@ -19,6 +19,38 @@ This repo gives you a side‑by‑side harness to compare:
 
 *OpenAI Dashboard showing comprehensive test results with tool call traces*
 
+### Azure Application Insights - KQL Query Results
+
+#### Items Ingested Overview
+![Items Ingested Chart](images/itemsinjested_chart.png)
+![Items Ingested Results](images/itemsinjested_result.png)
+
+*Azure Application Insights showing ingested telemetry data from the agents-sdk-ts service*
+
+#### Conversation Rollup with Trace ID
+![Conversation Rollup Chart](images/convorollupwithtraceid_chart.png)  
+![Conversation Rollup Results](images/convorollupwithtraceid_result.png)
+
+*KQL query results showing complete conversation flows with OpenAI trace ID correlation*
+
+#### Latency Analysis
+![Latency Chart](images/latency_chart.png)
+![Latency Results](images/latency_result.png)
+
+*Performance metrics showing request latency across agent operations*
+
+#### OpenAI Trace ID Correlation
+![OpenAI Trace ID Chart](images/openaitraceIdfound_chart.png)
+![OpenAI Trace ID Results](images/openaitraceIdfound_result.png)
+
+*Verification that OpenAI trace IDs are properly propagated to Azure Application Insights*
+
+#### Latest Message Analysis
+![Latest Message Chart](images/appinsights_lastmessagesent_chart.png)
+![Latest Message Results](images/appinsights_lastmessagesent_result.png)
+
+*Most recent agent execution with complete query/response details in Azure Application Insights*
+
 > 💡 **Pro Tip**: See our [detailed tracing guide](README-TRACING-GUIDE.md) for complete setup instructions and troubleshooting tips.
 
 ---

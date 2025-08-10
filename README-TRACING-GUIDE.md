@@ -318,6 +318,40 @@ class ComprehensiveEval:
 - **Setup**: Add connection string to `.env`
 - **What to see**: Custom telemetry and trace correlation
 
+#### KQL Query Results & Analysis
+
+##### Items Ingested Verification
+![Items Ingested Chart](images/itemsinjested_chart.png)
+![Items Ingested Results](images/itemsinjested_result.png)
+
+*Verification query showing all telemetry items ingested from the agents-sdk-ts service*
+
+##### Conversation Rollup with OpenAI Trace Correlation
+![Conversation Rollup Chart](images/convorollupwithtraceid_chart.png)
+![Conversation Rollup Results](images/convorollupwithtraceid_result.png)
+
+*Complete conversation flow analysis with OpenAI trace ID correlation, showing query/response pairs and tool usage*
+
+##### Performance & Latency Analysis
+![Latency Chart](images/latency_chart.png)
+![Latency Results](images/latency_result.png)
+
+*Latency metrics across different operation types (requests, tool calls, response synthesis)*
+
+##### OpenAI Trace ID Propagation Verification
+![OpenAI Trace ID Chart](images/openaitraceIdfound_chart.png)
+![OpenAI Trace ID Results](images/openaitraceIdfound_result.png)
+
+*Validation that OpenAI trace IDs are properly stamped on all operation types*
+
+##### Latest Message Detailed Analysis
+![Latest Message Chart](images/appinsights_lastmessagesent_chart.png)
+![Latest Message Results](images/appinsights_lastmessagesent_result.png)
+
+*Most recent agent execution showing complete telemetry context including query, response, and trace correlation*
+
+> 📊 **KQL Queries**: All queries used to generate these results are available in [`kqls/kqlfromchatgpt.md`](kqls/kqlfromchatgpt.md) for easy copy-paste into Azure Application Insights.
+
 ## 🎯 Best Practices
 
 ### 1. Agent Naming Strategy
