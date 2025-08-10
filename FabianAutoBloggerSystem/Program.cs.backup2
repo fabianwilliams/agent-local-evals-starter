@@ -1,0 +1,683 @@
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Agents;
+using Microsoft.SemanticKernel.Agents.Chat;
+using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.Ollama;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using System.Text;
+
+internal class Program
+{
+    private static IConfiguration? _configuration;
+    private static ILogger<Program>? _logger;
+    
+    private static async Task Main(string[] args)
+    {
+        // Initialize configuration and logging
+        var configurationBuilder = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+        _configuration = configurationBuilder.Build();
+
+        var loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddConsole();
+        });
+        _logger = loggerFactory.CreateLogger<Program>();
+
+        Console.WriteLine("🚀 Starting Fabian Auto Blogger System (FABS)");
+        Console.WriteLine(new string('=', 70));
+
+        // Initialize the kernel
+        var kernel = await InitializeKernelAsync();
+
+        Console.WriteLine("Defining Blog Writing Agents...");
+
+        // Define Agent Names
+        const string ChiefOfStaffName = "ChiefOfStaffAgent";
+        const string ResearcherName = "ResearcherAgent";
+        const string WriterName = "WriterAgent";  
+        const string CopyEditorName = "CopyEditorAgent";
+        const string LegalName = "LegalAgent";
+
+        // Define Chief of Staff Agent
+        ChatCompletionAgent chiefOfStaffAgent = new()
+        {
+            Name = ChiefOfStaffName,
+            Instructions =
+                """
+                You are the Chief of Staff Agent for the Fabian Auto Blogger System (FABS).
+                Your role is to orchestrate the blog creation process from draft idea to final publication.
+
+                **Your Responsibilities:**
+                - Analyze incoming draft content and understand its intent and scope
+                - Route tasks to the appropriate specialist agents (Researcher, Writer, CopyEditor, Legal)
+                - Ensure the blog post follows Fabian's established style and format  
+                - Coordinate between agents to create cohesive, high-quality blog content
+                - Make final decisions on blog post structure, tone, and readiness for publication
+
+                **Fabian's Blog Style Guidelines:**
+                - Technical but accessible writing
+                - Use emoji section headers (🚀 🛠️ 🧠 📋 etc.)
+                - Include practical examples and code snippets  
+                - Add visual elements and diagrams where helpful
+                - Maintain an encouraging, educational tone
+                - Include clear takeaways and actionable advice
+
+                **Process Flow:**
+                1. Understand the draft concept and target audience
+                2. Request research on technical details and current best practices
+                3. Guide the writer to create engaging, educational content
+                4. Ensure copy editing for clarity and consistency
+                5. Verify legal/logical soundness of all claims
+                6. Finalize the post in proper markdown format
+
+                Always maintain Fabian's authentic voice: experienced but approachable, technically deep but practical.
+                """,
+            Kernel = kernel,
+            Arguments = new KernelArguments(
+                new PromptExecutionSettings()
+                {
+                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
+                })
+        };
+
+        // Define Researcher Agent
+        ChatCompletionAgent researcherAgent = new()
+        {
+            Name = ResearcherName,
+            Instructions =
+                """
+                You are the Research Agent for FABS - an expert technical researcher and fact-checker.
+                
+                **Your Expertise:**
+                - AI/ML technologies, frameworks, and tools
+                - Software development practices and methodologies  
+                - Cloud platforms (Azure, AWS, etc.)
+                - Developer tools and workflows
+                - Programming languages (.NET, Python, TypeScript, etc.)
+                - Current industry trends and best practices
+
+                **Your Responsibilities:**
+                - Research technical accuracy of claims and concepts
+                - Identify current best practices and emerging trends
+                - Fact-check technical details and version numbers
+                - Suggest relevant examples, tools, and resources
+                - Provide background context for complex topics
+                - Identify potential gaps in the content that need addressing
+
+                **Research Standards:**
+                - Always verify technical claims and specifications  
+                - Check for the latest versions of tools, frameworks, and libraries
+                - Identify authoritative sources and documentation
+                - Note any deprecated or outdated practices
+                - Suggest contemporary alternatives and improvements
+
+                Provide thorough, accurate research that enhances the technical credibility of the blog post.
+                """,
+            Kernel = kernel,
+        };
+
+        // Load the blog template for the Writer Agent
+        var templateContent = await LoadBlogTemplateAsync();
+
+        // Define Writer Agent  
+        ChatCompletionAgent writerAgent = new()
+        {
+            Name = WriterName,
+            Instructions =
+                $"""
+                You are the Writer Agent for FABS - a skilled technical writer specializing in Fabian's distinctive style.
+
+                **Your Mission:**
+                Transform Word document content into publication-ready blog posts that match Fabian's established format and voice.
+
+                **Fabian's Writing Voice:**
+                - Experienced practitioner sharing real-world insights
+                - Conversational yet authoritative tone
+                - Practical focus with concrete examples
+                - Encouraging and educational approach
+                - Uses personal projects and experiences as examples
+                - Balances technical depth with accessibility
+
+                **TEMPLATE TO FOLLOW:**
+                You must follow this exact structure and style from Fabian's blog template:
+
+                {templateContent}
+
+                **Content Transformation Guidelines:**
+                1. **Extract Key Information:** Identify main topics, examples, and insights from the Word document
+                2. **Structure with Emoji Headers:** Use consistent emoji sections (🚀 🛠️ 🧠 📋 🎯 💡 ⚠️ ✅ ❌)
+                3. **Hugo Frontmatter:** Create proper metadata with title, description, categories, tags
+                4. **Technical Depth:** Maintain accuracy while making content accessible
+                5. **Visual Elements:** Include code blocks, tables, and structured formatting
+                6. **Engaging Flow:** Create smooth transitions and logical progression
+                7. **Actionable Content:** Provide concrete takeaways and next steps
+
+                **Image Handling:**
+                - Reference images mentioned in the Word doc appropriately
+                - Use proper Hugo image syntax with alt text
+                - Follow the img/YYYY/MM/filename.png path structure
+
+                **Output Requirements:**
+                - Complete blog post in markdown format
+                - Proper Hugo frontmatter with +++
+                - Date set to today's date in YYYY-MM-DD format
+                - Author always set to "Fabian Williams"
+                - Appropriate categories and tags based on content
+                - Standard footer with social engagement section
+
+                Transform the Word document content into a compelling blog post that matches Fabian's authentic voice and proven format.
+                """,
+            Kernel = kernel,
+        };
+
+        // Define Copy Editor Agent
+        ChatCompletionAgent copyEditorAgent = new()
+        {
+            Name = CopyEditorName,
+            Instructions =
+                """
+                You are the Copy Editor Agent for FABS - an expert editor focused on clarity, consistency, and technical accuracy.
+
+                **Editorial Standards:**
+                - Ensure consistent voice and tone throughout
+                - Verify proper markdown formatting and structure
+                - Check grammar, spelling, and punctuation
+                - Maintain technical accuracy while improving readability
+                - Ensure logical flow and smooth transitions between sections
+                - Verify all links, code examples, and references are correct
+
+                **Technical Writing Standards:**
+                - Code blocks properly formatted with syntax highlighting
+                - Consistent terminology throughout the post
+                - Clear, concise explanations of technical concepts
+                - Proper capitalization of product names, tools, and technologies
+                - Appropriate use of technical jargon (explained when necessary)
+                - Consistent formatting of file paths, commands, and configuration
+
+                **Blog-Specific Requirements:**
+                - Verify Hugo frontmatter is complete and correctly formatted
+                - Check that emoji headers are used consistently 
+                - Ensure image references follow the correct path structure
+                - Validate that categories and tags are appropriate and consistent
+                - Confirm the author is set to "Fabian Williams"
+                - Verify the date format is YYYY-MM-DD
+
+                **Quality Checks:**
+                - Read for flow and engagement
+                - Ensure each section delivers clear value
+                - Check that examples are relevant and current
+                - Verify that the conclusion summarizes key points effectively
+                - Confirm the post meets the target audience's needs
+
+                Polish the content to publication-ready quality while maintaining Fabian's authentic voice and technical authority.
+                """,
+            Kernel = kernel
+        };
+
+        // Define Legal Agent (Logical Fallacy Checker)
+        ChatCompletionAgent legalAgent = new()
+        {
+            Name = LegalName,
+            Instructions =
+                """
+                You are the Legal Agent for FABS - a logic and reasoning specialist focused on intellectual rigor and accuracy.
+
+                **Your Primary Responsibilities:**
+                - Identify and flag logical fallacies in arguments and claims
+                - Ensure technical claims are supported by evidence or properly qualified  
+                - Check for overgeneralization, false equivalencies, and unsupported conclusions
+                - Verify that recommendations are balanced and consider potential limitations
+                - Flag any statements that could be misleading or harmful to readers
+                - Ensure ethical considerations are addressed where relevant
+
+                **Logical Fallacies to Watch For:**
+                - **Ad Hominem**: Attacking individuals rather than ideas
+                - **Straw Man**: Misrepresenting opposing viewpoints  
+                - **False Dichotomy**: Presenting only two options when more exist
+                - **Appeal to Authority**: Relying solely on authority without evidence
+                - **Hasty Generalization**: Drawing broad conclusions from limited examples
+                - **Correlation vs Causation**: Confusing correlation with causation
+                - **Survivorship Bias**: Only considering successful cases
+                - **Confirmation Bias**: Seeking only supporting evidence
+
+                **Technical Writing Considerations:**
+                - Ensure performance claims are qualified (e.g., "in my testing environment")
+                - Flag absolute statements that should be more nuanced
+                - Verify that deprecated or risky practices are properly warned against
+                - Check that security implications are adequately addressed
+                - Ensure compatibility claims specify versions and conditions
+
+                **Reference Materials:**
+                You have access to a comprehensive logic textbook that covers:
+                - Formal and informal logical fallacies
+                - Principles of sound reasoning
+                - Common errors in technical argumentation
+                - Standards for evaluating evidence and claims
+
+                **Your Output Should:**
+                - Identify specific logical issues with line references
+                - Suggest more precise or qualified language where needed
+                - Recommend additional evidence or disclaimers
+                - Flag any potentially misleading or harmful advice
+                - Ensure the overall argument structure is sound and well-supported
+
+                Your goal is to ensure the blog post maintains intellectual honesty and logical rigor while remaining accessible and practical.
+                """,
+            Kernel = kernel
+        };
+
+        // Define Selection Strategy (Which Agent Speaks Next?)
+        KernelFunction selectionFunction =
+            AgentGroupChat.CreatePromptFunctionForStrategy(
+                $$$"""
+                Examine the provided RESPONSE and choose the next participant based on the blog writing workflow.
+                State only the name of the chosen participant without explanation.
+                Never choose the participant named in the RESPONSE.
+
+                Choose only from these participants:
+                - {{{ResearcherName}}}
+                - {{{WriterName}}}
+                - {{{CopyEditorName}}}
+                - {{{LegalName}}}
+                - {{{ChiefOfStaffName}}}
+
+                Blog Writing Workflow Rules:
+                - If RESPONSE is initial draft content, start with {{{ResearcherName}}} to gather background
+                - If RESPONSE is from ResearcherAgent, move to {{{WriterName}}} to create the blog post
+                - If RESPONSE is from WriterAgent, move to {{{CopyEditorName}}} for editing and polish
+                - If RESPONSE is from CopyEditorAgent, move to {{{LegalName}}} for logical/factual review
+                - If RESPONSE is from LegalAgent, return to {{{ChiefOfStaffName}}} for final review
+                - If issues are identified by any agent, the Chief of Staff may route back to appropriate agents
+                - The Chief of Staff makes the final decision on publication readiness
+
+                RESPONSE:
+                {{$lastmessage}}
+                """,
+                safeParameterNames: "lastmessage"
+            );
+
+        // Define Termination Strategy (When to Stop)
+        const string TerminationToken = "PUBLISH_READY";
+
+        KernelFunction terminationFunction =
+            AgentGroupChat.CreatePromptFunctionForStrategy(
+                $$$"""
+                Examine the RESPONSE to determine if the blog post is ready for publication.
+                
+                The blog post is ready when ALL of the following are true:
+                - Content is well-researched and technically accurate
+                - Writing is polished and follows Fabian's style guidelines  
+                - Copy editing is complete with proper formatting
+                - Legal review has passed without logical fallacies or unsupported claims
+                - Chief of Staff has given final approval
+
+                If all criteria are met and the Chief of Staff declares it ready, respond with: {{{TerminationToken}}}
+                Otherwise, continue the workflow to address any remaining issues.
+
+                RESPONSE:
+                {{$lastmessage}}
+                """,
+                safeParameterNames: "lastmessage"
+            );
+
+        // Limit chat history to optimize token usage
+        ChatHistoryTruncationReducer historyReducer = new(3);
+
+        // Define the Agent Group Chat
+        AgentGroupChat chat =
+            new(chiefOfStaffAgent, researcherAgent, writerAgent, copyEditorAgent, legalAgent)
+            {
+                ExecutionSettings = new AgentGroupChatSettings
+                {
+                    SelectionStrategy =
+                        new KernelFunctionSelectionStrategy(selectionFunction, kernel)
+                        {
+                            // Always start with the Chief of Staff Agent
+                            InitialAgent = chiefOfStaffAgent,
+                            // Optimize token usage
+                            HistoryReducer = historyReducer,
+                            // Set prompt variable for tracking
+                            HistoryVariableName = "lastmessage",
+                            // Extract agent name from result
+                            ResultParser = (result) =>
+                            {
+                                var selectedAgent = result.GetValue<string>() ?? chiefOfStaffAgent.Name;
+                                Console.WriteLine($"🔍 Next Agent: {selectedAgent}");
+                                return selectedAgent;
+                            }
+                        },
+                    TerminationStrategy =
+                        new KernelFunctionTerminationStrategy(terminationFunction, kernel)
+                        {
+                            // Evaluate termination after Chief of Staff responses
+                            Agents = [chiefOfStaffAgent],
+                            // Optimize token usage  
+                            HistoryReducer = historyReducer,
+                            // Set prompt variable for tracking
+                            HistoryVariableName = "lastmessage",
+                            // Limit total turns to prevent infinite loops
+                            MaximumIterations = 15,
+                            // Determines if the process should exit
+                            ResultParser = (result) =>
+                                result.GetValue<string>()?.Contains(TerminationToken, StringComparison.OrdinalIgnoreCase) ?? false
+                        }
+                }
+            };
+
+        await ProcessDraftsAsync(kernel, chat);
+    }
+
+    private static Task<Kernel> InitializeKernelAsync()
+    {
+        var kernelBuilder = Kernel.CreateBuilder();
+
+        // Initialize Kernel using Ollama local models
+        var ollamaBaseUrl = _configuration?["Ollama:BaseUrl"] ?? "http://localhost:11434";
+        var ollamaModelId = _configuration?["Ollama:ModelId"] ?? "gpt-oss:120b";
+        
+        _logger?.LogInformation($"Initializing Ollama connection to {ollamaBaseUrl} with model {ollamaModelId}");
+
+        // Add Ollama Chat Completion service
+        // Note: Timeout is handled by Ollama server configuration
+        kernelBuilder.AddOllamaChatCompletion(modelId: ollamaModelId, endpoint: new Uri(ollamaBaseUrl));
+        
+        var timeoutMinutes = _configuration?.GetValue<int>("Ollama:TimeoutMinutes") ?? 15;
+        _logger?.LogInformation($"Using model {ollamaModelId} (configure Ollama server timeout if needed)");
+
+        return Task.FromResult(kernelBuilder.Build());
+    }
+
+    private static async Task ProcessDraftsAsync(Kernel kernel, AgentGroupChat chat)
+    {
+        var draftsFolder = _configuration?["Paths:DraftsFolder"];
+        var underManagementFolder = _configuration?["Paths:UnderManagementFolder"]; 
+        var finalDraftFolder = _configuration?["Paths:FinalDraftFolder"];
+
+        if (string.IsNullOrEmpty(draftsFolder) || string.IsNullOrEmpty(underManagementFolder) || string.IsNullOrEmpty(finalDraftFolder))
+        {
+            _logger?.LogError("Required folder paths not configured properly");
+            return;
+        }
+
+        Console.WriteLine($"📂 Monitoring drafts folder: {draftsFolder}");
+
+        if (!Directory.Exists(draftsFolder))
+        {
+            _logger?.LogError($"Drafts folder does not exist: {draftsFolder}");
+            return;
+        }
+
+        // Ensure output directories exist
+        Directory.CreateDirectory(underManagementFolder);
+        Directory.CreateDirectory(finalDraftFolder);
+
+        // Get all Word documents in drafts folder
+        var draftFiles = Directory.GetFiles(draftsFolder, "*.docx")
+            .Where(f => !Path.GetFileName(f).StartsWith("~$")) // Exclude temp files
+            .ToArray();
+        
+        if (draftFiles.Length == 0)
+        {
+            Console.WriteLine("📝 No Word document drafts found. Create a .docx file in the Drafts folder to begin.");
+            return;
+        }
+
+        foreach (var draftFile in draftFiles)
+        {
+            Console.WriteLine($"\n🎯 Processing draft: {Path.GetFileName(draftFile)}");
+            await ProcessSingleDraftAsync(chat, draftFile, underManagementFolder, finalDraftFolder);
+        }
+    }
+
+    private static async Task ProcessSingleDraftAsync(AgentGroupChat chat, string draftFilePath, string underManagementFolder, string finalDraftFolder)
+    {
+        try
+        {
+            // Extract content from Word document
+            var draftContent = ExtractWordDocumentContent(draftFilePath);
+            var fileName = Path.GetFileName(draftFilePath);
+
+            Console.WriteLine($"📖 Extracted Word document content ({draftContent.Length} characters)");
+
+            // Reset chat for new blog post
+            await chat.ResetAsync();
+
+            // Start with a simpler initial prompt to avoid overwhelming the model
+            var initialPrompt = $"""
+                New blog post request for FABS processing.
+                
+                File: {fileName}
+                Content: {draftContent.Substring(0, Math.Min(1000, draftContent.Length))}...
+                
+                Begin workflow: Research → Write → Edit → Legal Review → Finalize
+                Target: Publication-ready markdown blog post.
+                """.Trim();
+
+            chat.AddChatMessage(new ChatMessageContent(AuthorRole.User, initialPrompt));
+            
+            // Add the full content as a second message for context
+            if (draftContent.Length > 1000)
+            {
+                var fullContentMessage = $"""
+                    FULL DRAFT CONTENT:
+                    
+                    {draftContent}
+                    
+                    Use this content to create the blog post.
+                    """;
+                chat.AddChatMessage(new ChatMessageContent(AuthorRole.User, fullContentMessage));
+            }
+
+            chat.IsComplete = false;
+            var responses = new List<string>();
+
+            // Process through the agent workflow  
+            Console.WriteLine("🔄 Starting multi-agent blog creation workflow...");
+            
+            await foreach (ChatMessageContent response in chat.InvokeAsync())
+            {
+                Console.WriteLine($"💬 {response.AuthorName}: {response.Content?[..Math.Min(200, response.Content.Length)]}...");
+                responses.Add($"## {response.AuthorName}\n{response.Content}\n");
+
+                // Save work-in-progress to UnderAgentManagement
+                var wipFileName = $"WIP_{fileName}";
+                var wipPath = Path.Combine(underManagementFolder, wipFileName);
+                await File.WriteAllTextAsync(wipPath, string.Join("\n---\n", responses));
+            }
+
+            // Extract the final blog post content from the last agent response
+            var finalContent = responses.LastOrDefault();
+            if (!string.IsNullOrEmpty(finalContent))
+            {
+                // Save the final version
+                var finalFileName = $"FINAL_{DateTime.Now:yyyyMMdd}_{fileName}";
+                var finalPath = Path.Combine(finalDraftFolder, finalFileName);
+                
+                // Extract just the blog content (remove agent headers)
+                var blogContent = ExtractBlogContent(responses);
+                await File.WriteAllTextAsync(finalPath, blogContent);
+
+                Console.WriteLine($"✅ Blog post completed: {finalFileName}");
+                Console.WriteLine($"📁 Saved to: {finalPath}");
+
+                // Archive the original draft
+                var archivePath = Path.ChangeExtension(draftFilePath, ".processed.docx");
+                File.Move(draftFilePath, archivePath);
+                Console.WriteLine($"📦 Original Word document archived as: {Path.GetFileName(archivePath)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, $"Error processing draft: {draftFilePath}");
+            Console.WriteLine($"❌ Failed to process {Path.GetFileName(draftFilePath)}: {ex.Message}");
+        }
+    }
+
+    private static string ExtractBlogContent(List<string> responses)
+    {
+        // Look for the final blog post content (typically from the last few responses)
+        var relevantResponses = responses.TakeLast(3);
+        
+        foreach (var response in relevantResponses.Reverse())
+        {
+            // Look for Hugo frontmatter pattern
+            if (response.Contains("+++") && response.Contains("title ="))
+            {
+                // Extract just the blog content, removing agent headers
+                var lines = response.Split('\n');
+                var contentStart = -1;
+                
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    if (lines[i].StartsWith("+++"))
+                    {
+                        contentStart = i;
+                        break;
+                    }
+                }
+                
+                if (contentStart >= 0)
+                {
+                    return string.Join('\n', lines[contentStart..]);
+                }
+            }
+        }
+        
+        // Fallback: return the last response content
+        return responses.LastOrDefault() ?? "Failed to extract blog content.";
+    }
+
+    private static async Task<string> LoadBlogTemplateAsync()
+    {
+        try
+        {
+            var templateFolder = _configuration?["Paths:TemplateFolder"];
+            if (string.IsNullOrEmpty(templateFolder) || !Directory.Exists(templateFolder))
+            {
+                _logger?.LogWarning("Template folder not found, using default format");
+                return "No template found - use standard Hugo blog format with emoji headers";
+            }
+
+            // Find the first .md file in the template folder
+            var templateFiles = Directory.GetFiles(templateFolder, "*.md");
+            if (templateFiles.Length == 0)
+            {
+                _logger?.LogWarning("No template markdown files found");
+                return "No template found - use standard Hugo blog format with emoji headers";
+            }
+
+            var templateContent = await File.ReadAllTextAsync(templateFiles.First());
+            _logger?.LogInformation($"Loaded blog template: {Path.GetFileName(templateFiles.First())} ({templateContent.Length} characters)");
+            
+            return templateContent;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load blog template");
+            return "Error loading template - use standard Hugo blog format with emoji headers";
+        }
+    }
+
+    private static string ExtractWordDocumentContent(string docxFilePath)
+    {
+        try
+        {
+            using var doc = WordprocessingDocument.Open(docxFilePath, false);
+            var body = doc.MainDocumentPart?.Document?.Body;
+            
+            if (body == null)
+            {
+                return "Unable to extract content from Word document.";
+            }
+
+            var contentBuilder = new StringBuilder();
+            var imageCount = 0;
+
+            foreach (var element in body.Elements())
+            {
+                switch (element)
+                {
+                    case Paragraph paragraph:
+                        var paragraphText = GetParagraphText(paragraph);
+                        if (!string.IsNullOrWhiteSpace(paragraphText))
+                        {
+                            // Check if paragraph contains images
+                            if (paragraph.Descendants<Drawing>().Any())
+                            {
+                                imageCount++;
+                                contentBuilder.AppendLine($"[IMAGE {imageCount}: {paragraphText}]");
+                            }
+                            else
+                            {
+                                contentBuilder.AppendLine(paragraphText);
+                            }
+                            contentBuilder.AppendLine();
+                        }
+                        break;
+                        
+                    case Table table:
+                        contentBuilder.AppendLine("[TABLE DETECTED]");
+                        foreach (var row in table.Elements<TableRow>())
+                        {
+                            var cellTexts = new List<string>();
+                            foreach (var cell in row.Elements<TableCell>())
+                            {
+                                var cellText = string.Join(" ", cell.Elements<Paragraph>()
+                                    .Select(p => GetParagraphText(p))
+                                    .Where(t => !string.IsNullOrWhiteSpace(t)));
+                                cellTexts.Add(cellText);
+                            }
+                            if (cellTexts.Any(t => !string.IsNullOrWhiteSpace(t)))
+                            {
+                                contentBuilder.AppendLine("| " + string.Join(" | ", cellTexts) + " |");
+                            }
+                        }
+                        contentBuilder.AppendLine("[END TABLE]");
+                        contentBuilder.AppendLine();
+                        break;
+                }
+            }
+
+            var extractedContent = contentBuilder.ToString();
+            
+            if (imageCount > 0)
+            {
+                extractedContent = $"[DOCUMENT CONTAINS {imageCount} IMAGES]\n\n" + extractedContent;
+            }
+
+            return extractedContent;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, $"Failed to extract content from Word document: {docxFilePath}");
+            return $"Error extracting Word document content: {ex.Message}";
+        }
+    }
+
+    private static string GetParagraphText(Paragraph paragraph)
+    {
+        var textBuilder = new StringBuilder();
+        
+        foreach (var run in paragraph.Elements<Run>())
+        {
+            foreach (var text in run.Elements<Text>())
+            {
+                textBuilder.Append(text.Text);
+            }
+        }
+        
+        return textBuilder.ToString().Trim();
+    }
+}

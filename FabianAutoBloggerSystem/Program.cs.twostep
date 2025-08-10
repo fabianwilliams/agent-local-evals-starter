@@ -1,0 +1,300 @@
+using System;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.Ollama;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+
+internal class FixedTwoAgentProgram
+{
+    private static IConfiguration? _configuration;
+    private static ILogger<FixedTwoAgentProgram>? _logger;
+    
+    private static async Task Main(string[] args)
+    {
+        // Initialize configuration and logging
+        var configurationBuilder = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+        _configuration = configurationBuilder.Build();
+
+        var loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddConsole();
+        });
+        _logger = loggerFactory.CreateLogger<FixedTwoAgentProgram>();
+
+        Console.WriteLine("🚀 Starting FABS - Fixed Two-Agent Mode (Writer → CopyEditor)");
+        Console.WriteLine(new string('=', 70));
+
+        try
+        {
+            await RunFixedTwoAgentBlogGenerationAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Fatal error: {ex.Message}");
+            Environment.Exit(1);
+        }
+    }
+
+    private static async Task RunFixedTwoAgentBlogGenerationAsync()
+    {
+        // Initialize kernel with chat completion service
+        var kernel = CreateKernel();
+        var chatService = kernel.GetRequiredService<IChatCompletionService>();
+        
+        // Load paths and template
+        var draftsFolder = _configuration?["Paths:DraftsFolder"] ?? "";
+        var templateFolder = _configuration?["Paths:TemplateFolder"] ?? "";
+        var finalDraftFolder = _configuration?["Paths:FinalDraftFolder"] ?? "";
+
+        if (!Directory.Exists(draftsFolder))
+        {
+            Console.WriteLine($"❌ Drafts folder not found: {draftsFolder}");
+            return;
+        }
+
+        // Load template
+        var template = await LoadTemplateAsync(templateFolder);
+        
+        // Process Word documents
+        var docxFiles = Directory.GetFiles(draftsFolder, "*.docx")
+            .Where(f => !Path.GetFileName(f).StartsWith("~$"))
+            .ToArray();
+
+        if (docxFiles.Length == 0)
+        {
+            Console.WriteLine("📝 No Word documents found in drafts folder.");
+            return;
+        }
+
+        Directory.CreateDirectory(finalDraftFolder);
+
+        foreach (var docxFile in docxFiles)
+        {
+            Console.WriteLine($"\n🎯 Processing: {Path.GetFileName(docxFile)}");
+            await ProcessDocumentWithTwoStepsAsync(chatService, docxFile, template, finalDraftFolder);
+        }
+    }
+
+    private static async Task ProcessDocumentWithTwoStepsAsync(IChatCompletionService chatService, string docxPath, string template, string outputFolder)
+    {
+        try
+        {
+            // Extract Word document content
+            var content = ExtractWordContent(docxPath);
+            Console.WriteLine($"📖 Extracted {content.Length} characters");
+
+            // Step 1: Writer creates the blog post
+            Console.WriteLine("📝 Step 1: Writer creating blog post...");
+            var writerPrompt = CreateWriterPrompt(content, template);
+            var writerResponse = await chatService.GetChatMessageContentAsync(writerPrompt);
+            
+            if (string.IsNullOrEmpty(writerResponse?.Content))
+            {
+                Console.WriteLine("❌ Writer failed to generate content");
+                return;
+            }
+
+            Console.WriteLine($"✅ Writer completed ({writerResponse.Content.Length} characters)");
+
+            // Step 2: CopyEditor polishes the blog post (with timeout handling)
+            Console.WriteLine("✏️ Step 2: CopyEditor polishing for grammar and readability...");
+            ChatMessageContent finalResponse;
+            
+            try
+            {
+                var editorPrompt = CreateEditorPrompt(writerResponse.Content);
+                finalResponse = await chatService.GetChatMessageContentAsync(editorPrompt);
+                
+                if (string.IsNullOrEmpty(finalResponse?.Content))
+                {
+                    Console.WriteLine("⚠️ CopyEditor returned empty, using Writer output");
+                    finalResponse = writerResponse;
+                }
+                else
+                {
+                    Console.WriteLine($"✅ CopyEditor completed ({finalResponse.Content.Length} characters)");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ CopyEditor timeout/error: {ex.Message}");
+                Console.WriteLine("📝 Using Writer output (already high quality)");
+                finalResponse = writerResponse;
+            }
+
+            // Save the final result
+            var fileName = $"BLOG_2STEP_{DateTime.Now:yyyyMMdd_HHmmss}_{Path.GetFileNameWithoutExtension(docxPath)}.md";
+            var outputPath = Path.Combine(outputFolder, fileName);
+            
+            await File.WriteAllTextAsync(outputPath, finalResponse.Content);
+            
+            Console.WriteLine($"✅ Two-step blog completed: {fileName}");
+            Console.WriteLine($"📁 Saved to: {outputPath}");
+
+            // Archive the original
+            var archivePath = Path.ChangeExtension(docxPath, ".twostep.processed.docx");
+            File.Move(docxPath, archivePath);
+            Console.WriteLine($"📦 Original archived: {Path.GetFileName(archivePath)}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Error processing {Path.GetFileName(docxPath)}: {ex.Message}");
+        }
+    }
+
+    private static string CreateWriterPrompt(string content, string template)
+    {
+        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        return $"""
+            Transform this Word document content into a complete blog post in Fabian Williams' style.
+
+            STYLE TEMPLATE:
+            {template.Substring(0, Math.Min(1000, template.Length))}...
+
+            CONTENT TO TRANSFORM:
+            {content.Substring(0, Math.Min(1500, content.Length))}...
+
+            REQUIREMENTS:
+            - Complete Hugo frontmatter with +++, author "Fabian Williams", date "{today}"
+            - Emoji headers (🚀 🛠️ 🧠 📋 🎯) matching template style
+            - Technical but conversational tone like Fabian's
+            - Include code examples and practical advice
+            - Generate the COMPLETE markdown blog post ready for publication
+
+            Generate the complete blog post:
+            """;
+    }
+
+    private static string CreateEditorPrompt(string blogContent)
+    {
+        return $"""
+            You are a professional copy editor. Polish this blog post for grammar, spelling, and readability at a 1st-year college level while preserving ALL technical content and original intent.
+
+            BLOG POST TO EDIT:
+            {blogContent}
+
+            EDITING RULES:
+            1. Fix grammar, spelling, punctuation errors
+            2. Ensure 1st-year college reading level
+            3. Keep ALL technical content exactly intact
+            4. Preserve Fabian's authentic voice and style
+            5. Fix markdown formatting if needed
+            6. NEVER remove or change the core technical message
+            7. Keep all code examples and technical details
+
+            Output the complete, polished blog post (including frontmatter):
+            """;
+    }
+
+    private static Kernel CreateKernel()
+    {
+        var builder = Kernel.CreateBuilder();
+        
+        var baseUrl = _configuration?["Ollama:BaseUrl"] ?? "http://localhost:11434";
+        var modelId = _configuration?["Ollama:ModelId"] ?? "gpt-oss:120b";
+        
+        Console.WriteLine($"🔗 Connecting to {baseUrl} with model {modelId}");
+        
+        builder.AddOllamaChatCompletion(modelId: modelId, endpoint: new Uri(baseUrl));
+        
+        return builder.Build();
+    }
+
+    private static async Task<string> LoadTemplateAsync(string templateFolder)
+    {
+        try
+        {
+            if (!Directory.Exists(templateFolder))
+            {
+                return "Use Hugo blog format with emoji headers and frontmatter.";
+            }
+
+            var templateFiles = Directory.GetFiles(templateFolder, "*.md");
+            if (templateFiles.Length == 0)
+            {
+                return "Use Hugo blog format with emoji headers and frontmatter.";
+            }
+
+            var template = await File.ReadAllTextAsync(templateFiles.First());
+            Console.WriteLine($"📋 Loaded template: {Path.GetFileName(templateFiles.First())}");
+            return template;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"⚠️ Template load failed: {ex.Message}");
+            return "Use Hugo blog format with emoji headers and frontmatter.";
+        }
+    }
+
+    private static string ExtractWordContent(string docxPath)
+    {
+        try
+        {
+            using var doc = WordprocessingDocument.Open(docxPath, false);
+            var body = doc.MainDocumentPart?.Document?.Body;
+            
+            if (body == null) return "Could not extract content.";
+
+            var content = new StringBuilder();
+            
+            foreach (var element in body.Elements())
+            {
+                if (element is Paragraph paragraph)
+                {
+                    var text = GetParagraphText(paragraph);
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        content.AppendLine(text);
+                        content.AppendLine();
+                    }
+                }
+                else if (element is Table table)
+                {
+                    content.AppendLine("[TABLE CONTENT]");
+                    foreach (var row in table.Elements<TableRow>())
+                    {
+                        var cells = row.Elements<TableCell>()
+                            .Select(cell => string.Join(" ", cell.Elements<Paragraph>()
+                                .Select(p => GetParagraphText(p))
+                                .Where(t => !string.IsNullOrWhiteSpace(t))))
+                            .Where(t => !string.IsNullOrWhiteSpace(t));
+                        
+                        if (cells.Any())
+                        {
+                            content.AppendLine("| " + string.Join(" | ", cells) + " |");
+                        }
+                    }
+                    content.AppendLine("[/TABLE]");
+                    content.AppendLine();
+                }
+            }
+
+            return content.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error extracting Word content: {ex.Message}";
+        }
+    }
+
+    private static string GetParagraphText(Paragraph paragraph)
+    {
+        var text = new StringBuilder();
+        foreach (var run in paragraph.Elements<Run>())
+        {
+            foreach (var textElement in run.Elements<Text>())
+            {
+                text.Append(textElement.Text);
+            }
+        }
+        return text.ToString().Trim();
+    }
+}

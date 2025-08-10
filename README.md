@@ -4,8 +4,20 @@ This repo gives you a side‑by‑side harness to compare:
 - **A. .NET Semantic Kernel + Ollama (local model)** with OpenTelemetry → Azure Monitor
 - **B. OpenAI Agents SDK (TypeScript/Node)** with a simple tool and OTLP tracing
 - **C. Evals (Python)** to score both approaches with the same prompts
+- **🤖 D. FABS Auto-Blogger System** - Production 2-agent blog publishing pipeline
 
 > Tested on macOS with VS Code. Assumes Ollama is installed and running.
+
+## 🎉 **NEW**: Production Blog Publishing with Local Models
+
+**The FABS (Fabian Auto Blogger System) demonstrates a complete production workflow:**
+- **Writer Agent** creates publication-ready blog posts using local gpt-oss:120b
+- **CopyEditor Agent** polishes content for grammar and college-level readability  
+- **End-to-end publishing** from Word documents to live website with CI/CD
+- **Image management** with automatic organization by year/month
+- **Hugo integration** with proper frontmatter and static file handling
+
+**✅ Real Success Story**: This README was updated after FABS successfully generated and published a complete blog post to [fabianwilliams.com](https://fabianwilliams.com) using only local models - no OpenAI API calls required for the content generation!
 
 ## 📊 System in Action
 
@@ -130,12 +142,47 @@ Results print to console. You can wrap these calls in your own runner that emits
 
 ---
 
+---
+
+## 🤖 D) FABS Auto-Blogger System (Production 2-Agent Pipeline)
+
+The **Fabian Auto Blogger System** showcases how local models can power complete production workflows:
+
+```bash
+cd FabianAutoBloggerSystem
+
+# Configure your paths in appsettings.json:
+# - DraftsFolder: Where you place Word documents (.docx)
+# - TemplateFolder: Your blog template for style reference  
+# - Blog paths: Target Hugo blog repository locations
+
+# Run the 2-agent publishing pipeline
+dotnet run
+```
+
+**What happens:**
+1. **📖 Content Extraction**: Reads Word documents and associated images
+2. **📝 Writer Agent**: Creates complete blog posts using local gpt-oss:120b
+3. **✏️ CopyEditor Agent**: Polishes for grammar and readability (optional - graceful timeout fallback)
+4. **🖼️ Image Processing**: Organizes images by year/month, updates markdown paths
+5. **📰 Blog Publishing**: Copies to Hugo blog repository with proper frontmatter
+6. **🚀 CI/CD Ready**: Provides git commands for automated deployment
+
+**Real Results**: Successfully generated and published the "Agent + Local Model + Evals — One‑Pager" blog post visible at [fabianwilliams.com](https://fabianwilliams.com), including 25 properly organized images and complete Hugo integration.
+
+---
+
 ## Structure
 
 ```
-/sk-ollama       # .NET console app (Semantic Kernel + Ollama + Azure Monitor exporter)
-/agents-sdk-ts   # Node/TS agent (OpenAI Agents SDK + OTLP tracing)
-/evals           # Python evals and simple JSONL dataset
+/sk-ollama              # .NET console app (Semantic Kernel + Ollama + Azure Monitor exporter)
+/agents-sdk-ts          # Node/TS agent (OpenAI Agents SDK + OTLP tracing)
+/evals                  # Python evals and simple JSONL dataset
+/FabianAutoBloggerSystem # 🤖 Production 2-agent blog publishing pipeline
+    ├── Program.cs           # Full publishing pipeline (Writer → CopyEditor → Publish)
+    ├── SimpleProgram.cs     # Single-agent version (Writer only)
+    ├── appsettings.json     # Path and model configuration
+    └── SOLUTION-NOTES.md    # Performance comparison and usage notes
 ```
 
 ---
@@ -145,3 +192,12 @@ Results print to console. You can wrap these calls in your own runner that emits
 - For Azure Monitor, use `AZURE_MONITOR_CONNECTION_STRING` or `APPINSIGHTS_CONNECTION_STRING`.
 - For OTLP, set `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g., your local Collector or vendor endpoint).
 - You can extend tools in both projects to hit your real systems or MCP servers.
+- **FABS System**: Proves local models can handle complex, multi-step production workflows including content generation, editing, and automated publishing with proper error handling and CI/CD integration.
+
+---
+
+## 🏆 Production Achievement
+
+**This repository showcases a real production success**: The FABS system successfully generated and published a complete technical blog post using only local models (gpt-oss:120b), demonstrating that sophisticated AI workflows don't require cloud API dependencies. 
+
+**View the live result**: [Agent + Local Model + Evals — One-Pager](https://fabianwilliams.com) ✨
