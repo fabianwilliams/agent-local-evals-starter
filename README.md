@@ -200,4 +200,4 @@ dotnet run
 
 **This repository showcases a real production success**: The FABS system successfully generated and published a complete technical blog post using only local models (gpt-oss:120b), demonstrating that sophisticated AI workflows don't require cloud API dependencies. 
 
-**View the live result**: [Agent + Local Model + Evals — One-Pager](https://fabianwilliams.com) ✨
+**View the live result**: [Agent + Local Model + Evals — One-Pager](https://fabswill.com) ✨
