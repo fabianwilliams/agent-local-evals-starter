@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { tracer as azureTracer, azureEnabled } from './otel.js';
 import { Agent, run, tool } from '@openai/agents';
 import { z } from 'zod';
+import { context, trace as otelTrace, SpanKind } from '@opentelemetry/api';
 
 // One clear status line based on otel.ts init
 console.log(
@@ -37,10 +38,15 @@ async function main(): Promise<void> {
     throw new Error('OPENAI_API_KEY environment variable is required');
   }
 
-  // Create Azure Application Insights span as REQUEST (not dependency)
-  const span = azureEnabled ? azureTracer.startSpan('agent.execution') : null;
-  if (span) {
-    span.setAttributes({
+  // Parent span (REQUEST)
+  const parent = azureEnabled
+    ? azureTracer.startSpan('agent.execution', { kind: SpanKind.SERVER })
+    : null;
+  const parentCtx = parent ? otelTrace.setSpan(context.active(), parent) : undefined;
+
+  if (parent) {
+    parent.setAttributes({
+      'otel.trace_id': parent.spanContext().traceId,
       'http.method': 'POST',
       'http.route': '/agent/query',
       'http.url': 'http://localhost/agent/query',
@@ -56,40 +62,75 @@ async function main(): Promise<void> {
     const query =
       "What's the time right now? Please respond with an ISO-8601 timestamp as well as a human friendly timestamp.";
     console.log(`📝 Query: ${query}`);
-    if (span) {
-      span.setAttributes({ 'agent.query': query, 'query.timestamp': new Date().toISOString() });
-    }
+    parent?.setAttributes({ 'agent.query': query, 'query.timestamp': new Date().toISOString() });
 
     const startTime = Date.now();
-    const result = await run(timeAgent, query);
+
+    // Run the agent inside the parent span's context so children are correctly parented
+    const result = await (parent
+      ? context.with(parentCtx!, () => run(timeAgent, query))
+      : run(timeAgent, query));
+
     const endTime = Date.now();
 
     // Extract the response safely
     let responseText = 'Response received (content format not accessible)';
-    const finalMessage = result.output.find(
-      (item: any) => item.type === 'message' && item.role === 'assistant'
+
+    // Type guard: does this object look like a message with content?
+    function isAssistantMessageWithContent(x: unknown): x is {
+      type: 'message';
+      role: 'assistant';
+      content: Array<{ type: string; text?: string }>;
+    } {
+      return !!x &&
+        typeof x === 'object' &&
+        (x as any).type === 'message' &&
+        (x as any).role === 'assistant' &&
+        Array.isArray((x as any).content);
+    }
+
+    const finalMessage = (result as any)?.output?.find(
+      (item: any) => item?.type === 'message' && item?.role === 'assistant'
     );
-    if (finalMessage && Array.isArray((finalMessage as any).content)) {
-      const textContent = (finalMessage as any).content.find(
-        (c: any) => c.type === 'text' || c.type === 'output_text'
+
+    if (isAssistantMessageWithContent(finalMessage)) {
+      const part = finalMessage.content.find(
+        c => c?.type === 'text' || c?.type === 'output_text'
       );
-      if (textContent?.text) {
-        responseText = textContent.text;
+      if (part?.text) {
+        responseText = part.text;
         console.log(`✅ Response: ${responseText}`);
       }
     } else {
       console.log('✅ Response received (content format not accessible)');
     }
+
     console.log(`⏱️ Response Time: ${endTime - startTime}ms`);
 
-    // Tool call spans (best-effort)
+    // OpenAI trace id (if Agents SDK provides it)
+    const openaiTraceId =
+      (result as any)?.state?._trace?.traceId ?? (result as any)?._trace?.traceId ?? null;
+    if (openaiTraceId) {
+      console.log(`🆔 Trace ID: ${openaiTraceId}`);
+      console.log('📊 Check OpenAI Dashboard: https://platform.openai.com/organization/logs');
+    }
+
+    // Tool call spans (children of parent)
     if (azureEnabled) {
-      const toolCalls = result.output.filter(
-        (item: any) => item.type === 'hosted_tool_call' || item.type === 'function_call'
-      );
+      const toolCalls =
+        result.output?.filter(
+          (item: any) => item.type === 'hosted_tool_call' || item.type === 'function_call'
+        ) ?? [];
+
       toolCalls.forEach((toolCall: any, index: number) => {
-        const toolSpan = azureTracer.startSpan('tool.execution');
+        const toolSpan = azureTracer.startSpan(
+          'tool.execution',
+          { kind: SpanKind.INTERNAL },
+          parentCtx
+        );
         toolSpan.setAttributes({
+          'otel.trace_id': toolSpan.spanContext().traceId,
+          ...(openaiTraceId ? { 'openai.trace_id': openaiTraceId } : {}),
           'tool.name': toolCall?.name ?? 'unknown',
           'tool.index': index,
           'operation.type': 'tool_call',
@@ -102,8 +143,15 @@ async function main(): Promise<void> {
         console.log(`🔧 Tool Call ${index + 1}: ${toolCall?.name ?? 'unknown'}() logged to Azure`);
       });
 
-      const synthesisSpan = azureTracer.startSpan('agent.synthesis');
+      // Response synthesis span (child)
+      const synthesisSpan = azureTracer.startSpan(
+        'agent.synthesis',
+        { kind: SpanKind.INTERNAL },
+        parentCtx
+      );
       synthesisSpan.setAttributes({
+        'otel.trace_id': synthesisSpan.spanContext().traceId,
+        ...(openaiTraceId ? { 'openai.trace_id': openaiTraceId } : {}),
         'operation.type': 'response_synthesis',
         'agent.response': responseText,
         'agent.response_length': responseText.length,
@@ -113,22 +161,16 @@ async function main(): Promise<void> {
       console.log(`📝 Response synthesis logged: "${responseText.substring(0, 100)}..."`);
     }
 
-    // Print OpenAI trace id if present
-    const traceId = (result.state as any)?._trace?.traceId;
-    if (traceId) {
-      console.log(`🆔 Trace ID: ${traceId}`);
-      console.log('📊 Check OpenAI Dashboard: https://platform.openai.com/organization/logs');
-    }
-
-    if (span) {
-      span.setAttributes({
+    // Finish parent
+    if (parent) {
+      parent.setAttributes({
         'response.time_ms': endTime - startTime,
         'agent.success': true,
         'agent.response': responseText,
         'agent.response_length': responseText.length,
-        'openai.trace_id': traceId ?? 'unknown',
+        ...(openaiTraceId ? { 'openai.trace_id': openaiTraceId } : {}),
       });
-      span.end();
+      parent.end();
     }
 
     console.log('='.repeat(70));
@@ -142,11 +184,9 @@ async function main(): Promise<void> {
       console.log('⚠️ Azure Application Insights not configured');
     }
   } catch (error) {
-    if (span) {
-      span.recordException(error as Error);
-      span.setAttributes({ 'agent.success': false });
-      span.end();
-    }
+    parent?.recordException(error as Error);
+    parent?.setAttributes({ 'agent.success': false });
+    parent?.end();
     console.error('❌ Error running agent:', error);
     process.exit(1);
   }
